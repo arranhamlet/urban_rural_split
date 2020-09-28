@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601300799819.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "935E65F",
+    "lastKnownWriteTime" : 1591017535,
+    "last_content_update" : 1591017535,
+    "path" : "Y:/Arran/PhD/processing_urban_rural/R/source_functions/pop_density_rural_urban_split.R",
+    "project_path" : "R/source_functions/pop_density_rural_urban_split.R",
+    "properties" : {
+        "cursorPosition" : "37,1",
+        "scrollLine" : "0"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

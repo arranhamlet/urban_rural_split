@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601300709930.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "F64C9797",
+    "lastKnownWriteTime" : 1601301026,
+    "last_content_update" : 1601301026134,
+    "path" : "Y:/Arran/PhD/processing_urban_rural/R/explore_data.R",
+    "project_path" : "R/explore_data.R",
+    "properties" : {
+        "cursorPosition" : "23,0",
+        "scrollLine" : "6",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

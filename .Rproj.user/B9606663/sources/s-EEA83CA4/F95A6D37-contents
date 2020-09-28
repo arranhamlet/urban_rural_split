@@ -1,0 +1,41 @@
+library(raster)
+library(ggplot2)
+library(data.table)
+library(rgeos)
+library(rgdal)
+
+invisible(sapply(list.files("R/source_functions", full.names = TRUE), function(x) source(x)))
+
+global_shapefile <- readOGR("//fi--didef3.dide.ic.ac.uk/Malaria/GADM/version3.6/GADM36_1/gadm36_1_new.shp")
+raster_pop_data <- raster("//fi--didenas1.dide.ic.ac.uk/yf/DATA/WorldPop/ppp_2020_1km_Aggregated.tif")
+
+urban_rural_country_level_data <- read.csv("data/WUP2018_urban_rural.csv", stringsAsFactors = FALSE)
+
+NGA_shapefile <- global_shapefile[which(global_shapefile$GID_0 == "NGA"), ]
+NGA_raster_pop_data <- rasterize(NGA_shapefile, crop(raster_pop_data, extent(NGA_shapefile)), mask = TRUE)
+NGA_country_level_data <- urban_rural_country_level_data[which(urban_rural_country_level_data$Region..subregion..country.or.area == "Nigeria"), ]
+
+#Work out the correct threshold for Nigeria population
+calibrate_NGA_urban_prop <- calculate_country_level_urban_threshold(NGA_raster_pop_data, NGA_country_level_data$Percentage.urban/100)
+NGA_urban_rural_data <- NGA_raster_pop_data
+NGA_urban_rural_data[NGA_urban_rural_data >= calibrate_NGA_urban_prop$density_correct] <- 1
+NGA_urban_rural_data[NGA_urban_rural_data != 1] <- 0
+
+
+pop_data_raster = NGA_raster_pop_data
+urban_rural_raster = NGA_urban_rural_data
+shapefile = NGA_shapefile
+
+
+NGA_pop_data <- pop_density_rural_urban_split(NGA_raster_pop_data,
+                              NGA_urban_rural_data,
+                              NGA_shapefile)
+
+write.csv(NGA_pop_data, "output/NGA_density_data.csv", row.names = FALSE)
+
+
+
+
+
+
+

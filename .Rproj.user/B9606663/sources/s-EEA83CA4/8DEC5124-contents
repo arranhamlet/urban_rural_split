@@ -1,0 +1,1096 @@
+
+
+cluster_run_source <- "new_PMCMC_fitting"
+
+
+options(scipen = 999)
+
+
+library(ggplot2)
+library(ggpubr)
+library(gghighlight)
+library(plyr)
+library(dplyr)
+library(data.table)
+library(scales)
+library(extrafont)
+library(readxl)
+library(lubridate)
+library(squire)
+library(tidyr)
+library(ggforce)
+library(grid)
+library(EpiEstim)
+library(incidence)
+library(Hmisc)
+library(rvest)
+library(purrr)
+library(flextable)
+
+source("cluster/cluster_data_load.R")
+
+
+#Now load data
+overall_df_files <- list.files(paste0("outputs/cluster_outputs/overall_df/", cluster_run_source), full.names = TRUE)
+
+all_raw_data <- do.call(rbind, sapply(overall_df_files, function(x) read.csv(x, stringsAsFactors = FALSE), simplify = FALSE))
+row.names(all_raw_data) <- NULL
+
+
+all_raw_data$date <- ymd("1900/01/01")
+all_raw_data$start_date <- ymd(all_raw_data$start_date)
+
+all_raw_data[which(all_raw_data$time < 0), ]$date <- c(all_raw_data[which(all_raw_data$time < 0), ]$start_date - abs(all_raw_data[which(all_raw_data$time < 0), ]$time))
+all_raw_data[which(all_raw_data$time >= 0), ]$date <- c(all_raw_data[which(all_raw_data$time >= 0), ]$start_date + abs(all_raw_data[which(all_raw_data$time  >= 0), ]$time))
+
+unique_scenarios <- unique(gsub(paste(paste0(unique(all_raw_data$state), "_"), collapse = "|"), "", 
+                                all_raw_data$scenario))
+
+levels <- c("0% reduction in transmission", unique_scenarios[which(grepl("90 days", unique_scenarios))], unique_scenarios[which(grepl("180 days", unique_scenarios))])
+
+all_raw_data$scenario[all_raw_data$scenario == "0% reduction in transmission for 180 days"] <- "0% reduction in transmission"
+
+all_raw_data$scenario_clean <- factor(gsub(paste(paste0(unique(all_raw_data$state), "_"), collapse = "|"), "", 
+                                           all_raw_data$scenario), 
+                                      levels = levels)
+
+NGA_log_plot <- cumulative_deaths_plot("Nigeria")
+NGA_overall_data <- download_ECDC_data()
+NGA_overall_data <- NGA_overall_data[which(NGA_overall_data$countryterritoryCode == "NGA"), ]
+NGA_overall_data$cumulative_cases <- sum(NGA_overall_data$cases)
+NGA_overall_data$cumulative_deaths <- sum(NGA_overall_data$deaths)
+
+NGA_overall_data <- NGA_overall_data[which(NGA_overall_data$dateRep == max(NGA_overall_data$dateRep)), ]
+
+
+death_here <- COVID_data_all[which(COVID_data_all$deaths != 0), ]
+death_here_rep <- death_here[rep(seq_len(nrow(death_here)), death_here$deaths), ]
+
+death_by_state <- do.call(rbind, sapply(unique(death_here_rep$state), function(n){
+  cumulative_d <- cumulate(incidence(death_here_rep[which(death_here_rep$state == n), ]$date))
+  data.frame(state = n, cumulative_deaths = cumulative_d$counts, date = cumulative_d$dates)
+}, simplify = FALSE))
+
+case_here <- COVID_data_all[which(COVID_data_all$cases != 0), ]
+case_here_rep <- case_here[rep(seq_len(nrow(case_here)), case_here$cases), ]
+
+case_by_state <- do.call(rbind, sapply(unique(case_here_rep$state), function(n){
+  cumulative_d <- cumulate(incidence(case_here_rep[which(case_here_rep$state == n), ]$date))
+  data.frame(state = n, cumulative_cases = cumulative_d$counts, date = cumulative_d$dates)
+}, simplify = FALSE))
+#
+
+COVID_case_data_cumulative <- full_join(death_by_state, case_by_state, by = c("state", "date"))
+COVID_case_data_cumulative[is.na(COVID_case_data_cumulative)] <- 0
+colnames(COVID_case_data_cumulative) <- gsub("cumulative_", "", colnames(COVID_case_data_cumulative))
+
+
+
+
+
+
+
+
+
+
+all_raw_data$compartment <- factor(all_raw_data$compartment,
+                                   levels = c("infections",
+                                              "hospital_demand",
+                                              "hospital_occupancy",
+                                              "ICU_demand",
+                                              "ICU_occupancy",
+                                              "deaths"))
+
+
+all_raw_data$clean_compartment <- gsub("ICU_demand", "ICU demand",
+                                       gsub("hospital_demand", "Hospital bed demand",
+                                            gsub("infections", "Infections",
+                                                 gsub("deaths", "Deaths",
+                                                      all_raw_data$compartment))))
+
+plot_data_here <- all_raw_data[-which(all_raw_data$compartment %in% 
+                                        c("hospital_occupancy", "hospital_demand", "ICU_demand", "ICU_occupancy")), ]
+
+  
+why_things_b <- plot_data_here[which(plot_data_here$state == "Nasarawa" & plot_data_here$compartment == "deaths"), ]
+why_things_b$incidence[which(is.na(why_things_b$incidence))] <- 0
+aggregate(why_things_b$incidence, by = list(scenario = why_things_b$scenario_clean),
+          FUN = sum)
+
+
+all_states_scenarios <- ggplot() +
+  geom_line(data = subset(plot_data_here,
+                          scenario %in% c("0% reduction in transmission",
+                                          "60% reduction in transmission for 90 days",
+                                          "30% reduction in transmission for 180 days",
+                                          "20% reduction in transmission for 180 days") &
+                            # state == "Nasarawa" &
+                            # scenario_clean == "Counterfactual" &
+                            # scenario_clean2 == "60% reduction in movement till December" & 
+                            clean_compartment == "Deaths"), aes(x = date, y = incidence, 
+                                                                color = scenario_clean, group = scenario_clean)) + 
+  theme_minimal() + 
+  facet_wrap(~state, ncol = 3, scales = "free", dir = "v") + 
+  labs(color = "",
+       x = "Time",
+       y = "Deaths") + 
+  xlim(ymd(Sys.Date()-14), 
+       ymd(Sys.Date() + (365-14))) + theme(legend.position = "bottom") + guides(color = guide_legend(nrow = 2)) +
+  scale_color_manual(values = c("0% reduction in transmission" = "gray50",
+                                "60% reduction in transmission for 90 days" = "tomato",
+                                "30% reduction in transmission for 180 days" = "darkgreen",
+                                "20% reduction in transmission for 180 days" = "skyblue"))
+
+#Final time points
+final_outcome_df <- do.call(rbind, sapply(unique(all_raw_data$state), function(y){
+  
+  final_outcome_df <- do.call(rbind, sapply(unique(all_raw_data$scenario), function(x){
+    
+    scenario_use_here <- all_raw_data[which(all_raw_data$scenario == x & all_raw_data$state == y), ]
+    scenario_use_here <- scenario_use_here[which(scenario_use_here$time > 0), ]
+    
+    time_all_infections <- scenario_use_here[which(scenario_use_here$compartment == "infections"), ]$time[which(scenario_use_here[which(scenario_use_here$compartment == "infections"), ]$incidence != 0)]
+    
+    population_state <- NGA_population_data[which(NGA_population_data$area_name2 == scenario_use_here$state[1] & 
+                                                    NGA_population_data$source == "Spectrum Jan 2020"), ]
+    
+    population_use <- rowSums(matrix(population_state$population, ncol = 2))
+    
+    # https://www.who.int/workforcealliance/countries/Nigeria_En.pdf
+    NGA_hospital_beds_per_10000 <- 5
+    # hospital_beds <- (sum(population_use)/10000)*NGA_hospital_beds_per_10000
+    
+    # hospital_beds
+    hospital_beds <- oxygen_data[which(oxygen_data$state == scenario_use_here$state[1]), ]$oxygen
+    
+    
+    dz <- data.frame(state = scenario_use_here$state[1],
+                     state_pop = sum(population_use),
+                     scenario = gsub(paste0(scenario_use_here$state[1], "_"), "", scenario_use_here$scenario[1]),
+                     duration_scenario = if(!any(grepl("days", scenario_use_here$scenario[1]))) 0 else if(grepl("180", scenario_use_here$scenario[1])) 180 else if(grepl("90", scenario_use_here$scenario[1])) 90,
+                     duration_of_outbreak = paste0(ceiling(max(time_all_infections)), " days"),
+                     cumulative_infections = sum(scenario_use_here[which(scenario_use_here$compartment == "infections"), ]$incidence),
+                     cumulative_deaths = sum(scenario_use_here[which(scenario_use_here$compartment == "deaths"), ]$incidence),
+                     peak_bed_demand = max(scenario_use_here[which(scenario_use_here$compartment == "hospital_demand"), ]$incidence),
+                     peak_ICU_demand = max(scenario_use_here[which(scenario_use_here$compartment == "ICU_demand"), ]$incidence),
+                     time_hospital_beds_exceeded = sum(scenario_use_here[which(scenario_use_here$compartment == "hospital_demand"), ]$incidence > hospital_beds),
+                     stringsAsFactors = FALSE)
+    
+    dz$cumulative_infections_per_100k <- (dz$cumulative_infections/100000)*(sum(population_use)/100000)
+    dz$cumulative_deaths_per_100k <- (dz$cumulative_deaths/100000)*(sum(population_use)/100000)
+    
+    dz
+    
+  }, simplify = FALSE))
+  final_outcome_df
+}, simplify = FALSE))
+
+row.names(final_outcome_df) <- NULL
+final_outcome_df <- final_outcome_df[order(final_outcome_df$cumulative_deaths_per_100k), ]
+
+final_outcome_df$scenario_clean <- factor(final_outcome_df$scenario, 
+                                          levels = levels)
+unique(final_outcome_df$scenario_clean)
+
+final_outcome_df$state <- factor(final_outcome_df$state, levels = unique(final_outcome_df[order(final_outcome_df$cumulative_deaths_per_100k), ]$state))
+deaths_cumulative_plot <- ggplot() + geom_bar(data = final_outcome_df, aes(x = state, y = cumulative_deaths, fill = scenario_clean, group = scenario_clean),
+                                              stat = "identity", position = "dodge") + 
+  labs(x = "", y = "Total deaths", fill = "Scenario") + theme_minimal() + coord_flip()
+
+final_outcome_df$state <- factor(final_outcome_df$state, levels = unique(final_outcome_df[order(final_outcome_df$cumulative_infections), ]$state))
+cases_cumulative_plot <- ggplot() + geom_bar(data = final_outcome_df, aes(x = state, y = cumulative_infections, fill = scenario_clean, group = scenario_clean),
+                                             stat = "identity", position = "dodge") + 
+  labs(x = "", y = "Total infections", fill = "Scenario") + theme_minimal() + coord_flip()
+
+
+
+total_scenario_df_save <- data.frame(State = final_outcome_df$state,
+                                     Scenario = final_outcome_df$scenario,
+                                     length_of_scenario = final_outcome_df$duration_scenario,
+                                     cumulative_deaths = round(final_outcome_df$cumulative_deaths),
+                                     cumulative_infections = final_outcome_df$cumulative_infections,
+                                     Days_hospital_bed_exceeded = final_outcome_df$time_hospital_beds_exceeded,
+                                     stringsAsFactors = FALSE)
+
+total_scenario_df_save <- total_scenario_df_save[order(total_scenario_df_save$State, total_scenario_df_save$cumulative_deaths, total_scenario_df_save$Days_hospital_bed_exceeded), ]
+total_scenario_df_save$cumulative_deaths <- formatC(round_any(total_scenario_df_save$cumulative_deaths, accuracy = 100), big.mark = ",", format = "fg")
+total_scenario_df_save$cumulative_infections <- formatC(round_any(total_scenario_df_save$cumulative_infections, accuracy = 100), big.mark = ",", format = "fg")
+
+total_scenario_df_save <- total_scenario_df_save[order(total_scenario_df_save$State, total_scenario_df_save$length_of_scenario), ]
+
+# write.csv(total_scenario_df_save, paste0("outputs/total_scenario_df_save", Sys.Date(), ".csv"))
+all_raw_data$scenario_clean <- all_raw_data$scenario
+all_raw_data$scenario_clean2 <- all_raw_data$scenario_clean
+
+
+
+hospital_capacity <- ggplot() + geom_line(data = subset(all_raw_data, compartment == "hospital_demand" &
+                                                          scenario_clean2 %in% c("0% reduction in transmission",
+                                                                                 "60% reduction in transmission for 90 days",
+                                                                                 "30% reduction in transmission for 180 days",
+                                                                                 "20% reduction in transmission for 180 days")), 
+                                          aes(x = date, y = incidence, color = scenario_clean2)) +
+  facet_wrap(~state, scales = "free") + theme_minimal() + geom_hline(data = subset(all_raw_data, compartment == "hospital_demand"),
+                                                                     aes(yintercept = hospital_bed_capacity)) +
+  # geom_text(data = subset(all_raw_data, compartment == "hospital_demand"),
+  # aes(y = hospital_bed_capacity*1.5, x = ymd("2021/03/01")), label = "Hospital\ncapacity") +
+  xlim(c(ymd(Sys.Date())-14, ymd(Sys.Date() + (365-14)))) + 
+  labs(x = "",
+       y = "Hospital bed demand",
+       color = "") + theme(legend.position = "bottom") + guides(color = guide_legend(nrow = 2)) +
+  scale_color_manual(values = c("0% reduction in transmission" = "gray50",
+                                "60% reduction in transmission for 90 days" = "tomato",
+                                "30% reduction in transmission for 180 days" = "darkgreen",
+                                "20% reduction in transmission for 180 days" = "skyblue"))
+
+
+ICU_capacity <- ggplot() + geom_line(data = subset(all_raw_data, compartment == "ICU_demand" &
+                                                     scenario_clean2 %in% c("0% reduction in transmission",
+                                                                            "60% reduction in transmission for 90 days",
+                                                                            "30% reduction in transmission for 180 days",
+                                                                            "20% reduction in transmission for 180 days")), 
+                                     aes(x = date, y = incidence, color = scenario_clean2)) +
+  facet_wrap(~state, scales = "free") + theme_minimal() + geom_hline(data = subset(all_raw_data, compartment == "ICU_demand"),
+                                                                     aes(yintercept = ventilators_capacity)) +
+  # geom_text(data = subset(all_raw_data, compartment == "ICU_demand"),
+  # aes(y = ventilators_capacity - 100, x = ymd("2021/03/01")), label = "ICU\ncapacity") +
+  xlim(c(ymd(Sys.Date())-14, ymd(Sys.Date() + (365-14)))) + 
+  labs(x = "",
+       y = "ICU demand",
+       color = "") + theme(legend.position = "bottom") + guides(color = guide_legend(nrow = 2)) + 
+  scale_color_manual(values = c("0% reduction in transmission" = "gray50",
+                                "60% reduction in transmission for 90 days" = "tomato",
+                                "30% reduction in transmission for 180 days" = "darkgreen",
+                                "20% reduction in transmission for 180 days" = "skyblue"))#+ scale_y_log10()
+
+
+ICU_bed_comparison <- ggarrange(hospital_capacity, ICU_capacity, nrow = 2, common.legend = T, legend = "bottom")
+
+
+#All data all runs
+squire_model <- list.files(paste0("outputs/cluster_outputs/squire_objects/", cluster_run_source), full.names = TRUE)
+squire_model <- squire_model[grepl("0percent reduction in transmission for 180 days|20percent reduction in transmission for 180 days|30percent reduction in transmission for 180 days|60percent reduction in transmission for 90 days", squire_model)]
+# 
+# squire_model_list <- sapply(squire_model, function(x){
+#   print(x)
+#   x <- load(x)
+#   get(x)
+# }, simplify = FALSE)
+
+all_forecasts <- do.call(rbind, sapply(squire_model, function(y){
+  print(y)
+  squire_model_list <- get(load(y))
+  s <- as.data.frame(format_output(squire_model_list[[1]], 
+                                   var_select = c("infections", "deaths", "ICU_demand", "hospital_demand"), 
+                                   reduce_age = TRUE, 
+                                   date_0 = Sys.Date()))
+  s$state <- squire_model_list[[2]]$state[1]
+  s$scenario <- unique(squire_model_list[[2]]$scenario)
+  s
+}, simplify = FALSE))
+
+
+
+
+# 
+# #Short term forecasts
+# short_forecasts <- do.call(rbind, sapply(which(grepl("20% reduction in transmission for 90 days", names(custom_runs))), function(x){
+#   print(x)
+#   s <- as.data.frame(format_output(run_for_all[[x]][[1]], 
+#                                    var_select = c("infections", "deaths", "ICU_demand", "hospital_demand"), 
+#                                    reduce_age = TRUE, 
+#                                    date_0 = Sys.Date()))
+#   s$state <- run_for_all[[x]][[2]]$state[1]
+#   s$scenario <- names(run_for_all)[x]
+#   s
+# }, simplify = FALSE))
+
+# 
+# all_forecasts$scenario <- gsub("outputs/cluster_outputs/squire_objects/", cluster_run_source, "/squire_object", "",
+#                                all_forecasts$scenario)
+
+short_forecasts_current_scenario <- all_forecasts[which(grepl("20% reduction", all_forecasts$scenario)), ]#[which(grepl("lift May 4th", 
+# paste0(c(paste0(c("FCT", "Lagos"), 
+# "_Movement restrictions lift May 4th"), "lift May 4th"), collapse = "|"))),]
+
+
+
+compartment_summary_last_month_next_2_weeks <- sapply(unique(short_forecasts_current_scenario$compartment), function(x){
+  
+  by_state <- do.call(rbind, sapply(unique(short_forecasts_current_scenario$state), function(y){
+    
+    state_here <- short_forecasts_current_scenario[which(short_forecasts_current_scenario$compartment == x & short_forecasts_current_scenario$state == y), ]
+    
+    all_rep_data <- do.call(rbind, sapply(unique(state_here$replicate), function(n){
+      this_rep <- state_here[which(state_here$replicate == n), ]
+      
+      month_ago <- Sys.Date() - 30
+      two_weeks_from_now <- Sys.Date() + 14
+      
+      data.frame(compartment = x,
+                 last_month = sum(this_rep[which(this_rep$date %in% month_ago:Sys.Date()), ]$y),
+                 next_2_weeks = sum(this_rep[which(this_rep$date %in% Sys.Date():two_weeks_from_now), ]$y),
+                 today = sum(this_rep[which(this_rep$date %in% Sys.Date()), ]$y),
+                 two_week_inci = this_rep[which(this_rep$date == Sys.Date()+14), ]$y,
+                 stringsAsFactors = FALSE)
+      
+    }, simplify = FALSE))
+    
+    data.frame(compartment = all_rep_data$compartment[1],
+               last_month_min = min(all_rep_data$last_month, na.rm = TRUE),
+               last_month_median = median(all_rep_data$last_month, na.rm = TRUE),
+               last_month_max = max(all_rep_data$last_month, na.rm = TRUE),
+               next_2_weeks_min = min(all_rep_data$next_2_weeks, na.rm = TRUE),
+               next_2_weeks_median = median(all_rep_data$next_2_weeks, na.rm = TRUE),
+               next_2_weeks_max = max(all_rep_data$next_2_weeks, na.rm = TRUE),
+               today_min = min(all_rep_data$today, na.rm = TRUE),
+               today_median = median(all_rep_data$today, na.rm = TRUE),
+               today_max = max(all_rep_data$today, na.rm = TRUE),
+               two_week_inci_min = min(all_rep_data$two_week_inci, na.rm = TRUE),
+               two_week_inci_median = median(all_rep_data$two_week_inci, na.rm = TRUE),
+               two_week_inci_max = max(all_rep_data$two_week_inci, na.rm = TRUE),
+               stringsAsFactors = FALSE)
+    
+  }, simplify = FALSE))
+  
+  by_state[, 2:ncol(by_state)] <- round(by_state[, 2:ncol(by_state)])
+  
+  
+  formatC(as.matrix(by_state[, 2:ncol(by_state)]), digits = "fg", big.mark = ",")
+  
+  by_state[, 2:ncol(by_state)] <- formatC(as.matrix(by_state[, 2:ncol(by_state)]), big.mark = ",", format = "fg")
+  
+  
+  clean_df <- data.frame(state = row.names(by_state),
+                         type = by_state$compartment,
+                         last_30 = paste0(by_state$last_month_median, " (", by_state$last_month_min, " - ", by_state$last_month_max, ")"),
+                         next_14 = paste0(by_state$next_2_weeks_median, " (", by_state$next_2_weeks_min, " - ", by_state$next_2_weeks_max, ")"),
+                         today = paste0(by_state$today_median, " (", by_state$today_min, " - ", by_state$today_max, ")"),
+                         two_week_inci = paste0(by_state$two_week_inci_median, " (", by_state$two_week_inci_min, " - ", by_state$two_week_inci_max, ")"))
+  
+  
+  clean_df
+  
+}, simplify = FALSE)
+
+
+two_week_forecast <- do.call(rbind, compartment_summary_last_month_next_2_weeks)
+
+
+squire_model_list <- sapply(squire_model[which(grepl("20percent reduction", squire_model))], function(x){
+  print(x)
+  x <- load(x)
+  get(x)
+}, simplify = FALSE)
+
+
+all_states_order <- sapply(which(grepl("20percent reduction in transmission for 180", names(squire_model_list))), function(x){
+  
+  this_model <- squire_model_list[[x]]
+  here_now <- this_model[[2]][which(this_model[[2]]$compartment == "deaths"), ]
+  here_now$date <- here_now$time + here_now$start_date
+  here_now[which(here_now$date == Sys.Date()+14), ]$incidence
+  
+})
+
+
+all_states_forecasts_infections_deaths <- sapply(which(grepl("20percent reduction in transmission for 180", names(squire_model_list)))[rev(order(all_states_order))], function(x){
+  
+  this_model <- squire_model_list[[x]]
+  
+  
+  forecast_deaths_state <- output_forecast_plots(squire_output = this_model[[1]],
+                                                 COVID_case_death_data = COVID_data_all[which(COVID_data_all$state == this_model[[2]]$state[1]), ],
+                                                 var_select = "deaths",
+                                                 covid_data_select = "deaths") + labs(y = "Deaths",
+                                                                                      title = this_model[[2]]$state[1]) + scale_x_date(limits = c(ymd(Sys.Date(), Sys.Date() + 14)), date_breaks = "5 days")
+  
+  # forecast_cases_state <- output_forecast_plots(squire_output = this_model[[1]],
+  #                                             COVID_case_death_data = COVID_data_all[which(COVID_data_all$state == this_model[[2]]$state[1]), ],
+  #                                             var_select = "infections",
+  #                                             covid_data_select = "cases") + labs(y = "Infections",
+  #                                                                                 title = "")
+  
+  # ggarrange(forecast_deaths_state, forecast_cases_state)
+  
+  forecast_deaths_state
+  
+}, simplify = FALSE)
+
+infections_deaths <- ggarrange(plotlist = all_states_forecasts_infections_deaths, 
+                               ncol = 2, 
+                               nrow = round_any(length(all_states_forecasts_infections_deaths)/2, 1, ceiling))
+
+
+
+
+
+all_states_forecasts_healthcare_icu <- sapply(which(grepl("20percent reduction in transmission for 180", names(squire_model_list)))[rev(order(all_states_order))], function(x){
+  
+  this_model <- squire_model_list[[x]]
+  
+  
+  forecast_deaths_state <- output_forecast_plots(squire_output = this_model[[1]],
+                                                 COVID_case_death_data = COVID_data_all[which(COVID_data_all$state == this_model[[2]]$state[1]), ],
+                                                 var_select = "hospital_demand",
+                                                 covid_data_select = "") + labs(y = "Hospital demand",
+                                                                                title = this_model[[2]]$state[1]) + scale_x_date(limits = c(ymd(Sys.Date(), Sys.Date() + 14)), date_breaks = "5 days")
+  
+  forecast_cases_state <- output_forecast_plots(squire_output = this_model[[1]],
+                                                COVID_case_death_data = COVID_data_all[which(COVID_data_all$state == this_model[[2]]$state[1]), ],
+                                                var_select = "ICU_demand",
+                                                covid_data_select = "") + labs(y = "ICU demand",
+                                                                               title = "") + scale_x_date(limits = c(ymd(Sys.Date(), Sys.Date() + 14)), date_breaks = "5 days")
+  
+  ggarrange(forecast_deaths_state, forecast_cases_state)
+  
+  
+  
+}, simplify = FALSE)
+
+healthcare_icu <- ggarrange(plotlist = all_states_forecasts_healthcare_icu, 
+                            ncol = 2, 
+                            nrow = round_any(length(all_states_forecasts_infections_deaths)/2, 1, ceiling))
+
+
+
+
+exceed_capacity_when <- do.call(rbind, sapply(unique(all_forecasts$state), function(y){
+  
+  this_scenario <- all_forecasts[which(all_forecasts$state == y & all_forecasts$scenario == "20% reduction in transmission for 180 days"), ]
+  
+  all_runs <- do.call(rbind, sapply(unique(this_scenario$replicate), function(b){
+    
+    this_scenario_run <- this_scenario[which(this_scenario$replicate == b), ]
+    
+    population_state <- NGA_population_data[which(NGA_population_data$area_name2 == this_scenario_run$state[1] & 
+                                                    NGA_population_data$source == "Spectrum Jan 2020"), ]
+    
+    population_use <- rowSums(matrix(population_state$population, ncol = 2))
+    
+    # https://www.who.int/workforcealliance/countries/Nigeria_En.pdf
+    NGA_hospital_beds_per_10000 <- 5
+    hospital_beds <- (sum(population_use)/10000)*NGA_hospital_beds_per_10000
+    healthcare_capacity <- oxygen_data[which(oxygen_data$state == this_scenario_run$state[1]), ]
+    
+    hospital_demand <- this_scenario_run[which(this_scenario_run$compartment == "hospital_demand"), ]
+    data.frame(state = this_scenario_run$state[1],
+               scenario = gsub(paste0(this_scenario_run$state[1], "_"), "", this_scenario_run$scenario[1]),
+               date_exceeded = hospital_demand$date[min(which(hospital_demand$y > healthcare_capacity$oxygen))], stringsAsFactors = FALSE)
+    
+  }, simplify = FALSE))
+  
+  data.frame(state = all_runs$state[1],
+             scenario = all_runs$scenario[1],
+             min_date_exceeded = min(all_runs$date_exceeded),
+             median_date_exceeded = median(all_runs$date_exceeded),
+             max_date_exceeded = max(all_runs$date_exceeded),
+             stringsAsFactors = FALSE)
+  
+  
+}, simplify = FALSE))
+
+# write.csv(exceed_capacity_when, paste0("outputs/exceed_capacity_when_", Sys.Date(),".csv"), row.names = FALSE)
+
+
+
+
+
+
+# Prop population infected by time
+all_raw_data$prop_infected_time <- NA
+
+all_infected <- all_raw_data[which(all_raw_data$compartment == "infections"), ]
+
+
+cumulative_infections <- sapply(unique(all_infected$scenario), function(x){
+  
+  this <- all_infected[which(all_infected$scenario == x), ]
+  this[is.na(this)] <- 0
+  cumsum(this$incidence)
+  
+}, simplify = FALSE)
+
+all_infected$cumulative_incidence <- do.call("c", cumulative_infections)
+
+all_infected$prop_pop_infected <- NA
+
+for(i in unique(all_infected$state)){
+  all_infected$prop_pop_infected[which(all_infected$state == i)] <- all_infected$cumulative_incidence[which(all_infected$state == i)]/sum(NGA_population_data[which(NGA_population_data$area_name2 == i &  NGA_population_data$source == "Spectrum Jan 2020"), ]$population)
+}
+
+all_infected$clean_scenario <- gsub(paste0(unique(all_infected$state), "_", collapse = "|"), 
+                                    "", 
+                                    all_infected$scenario)
+
+
+prop_infected_time <- ggplot() + 
+  geom_line(data = all_infected, aes(x = time, y = prop_pop_infected, color = clean_scenario)) +
+  facet_wrap(~state) + labs(x = "",
+                            y = "Proportion of the total population infected",
+                            color = "Scenario") + theme_minimal() + ylim(c(0, 1)) + theme(legend.position = "bottom")
+
+
+# 
+# ggsave(paste0("figs/", "prop_infected_time",
+#               gsub("-", "", Sys.Date()), ".png"), prop_infected_time, dpi = 300, width = 12, height = 6)
+# 
+# 
+# subset(all_infected, scenario_clean2 %in% c("60% reduction in movement till November",
+#                                             "Movement restrictions maintain"))
+# 
+
+
+
+
+#Calibrate plots
+zero_plots <- squire_model_list[which(grepl("20percent reduction in transmission for 180 days", names(squire_model_list)))]
+
+all_calibrate_plots <- sapply(1:length(zero_plots), function(y){
+  
+  this_one <- zero_plots[[y]]
+  death_days <- this_one$covid_case_death_data$date[which(this_one$covid_case_death_data$deaths != 0)]
+  
+  particle_fit <- plot(this_one$model_run, particle_fit = TRUE)
+  particle_fit +  
+    scale_x_date(limits = c(min(death_days)-2, max(death_days)+2), 
+                 breaks= "week", 
+                 date_labels = "%b %d") + 
+    geom_text(data = this_one$covid_case_death_data,
+              aes(x = min(death_days), y = 7.5,
+                  label = state), size = 4) + 
+    theme(axis.text.x = element_text(size = 8)) +
+    scale_y_continuous(breaks = function(x) unique(floor(pretty(x))),
+                       limits = c(0, 10))
+  
+}, simplify = FALSE)
+
+
+
+
+plot_fit_yay <- ggarrange(plotlist = all_calibrate_plots, ncol = 2, nrow = round_any(length(all_calibrate_plots)/2, 1, ceiling))
+
+# ggsave(paste0("figs/plot_fit_calibrate", Sys.Date(), ".png"), plot_fit_yay, width = 12, height = 8)
+
+
+
+# 
+# #All data all runs
+# squire_model <- list.files(paste0("outputs/cluster_outputs/squire_objects/", cluster_run_source), full.names = TRUE)
+# squire_model_list <- sapply(squire_model, function(x){
+#   print(x)
+#   x <- load(x)
+#   get(x)
+# }, simplify = FALSE)
+# 
+# all_forecasts <- do.call(rbind, sapply(1:length(squire_model_list), function(x){
+#   print(x)
+#   s <- as.data.frame(format_output(squire_model_list[[x]][[1]], 
+#                                    var_select = c("infections", "deaths", "ICU_demand", "hospital_demand"), 
+#                                    reduce_age = TRUE, 
+#                                    date_0 = Sys.Date()))
+#   s$state <- squire_model_list[[x]][[2]]$state[1]
+#   s$scenario <- names(squire_model_list)[x]
+#   s
+# }, simplify = FALSE))
+# 
+# 
+# #Okay go for the NCDC
+# all_forecasts$scenario <- gsub("U:/Arran/COVID/nigeria_squire/outputs/cluster_outputs/squire_objects/", cluster_run_source, "/squire_object",
+#                                "",
+#                                all_forecasts$scenario)
+
+library(plyr)
+library(dplyr)
+ncdc_outcomes_month <- do.call(rbind.fill, sapply(unique(all_forecasts$state), function(x){
+  # print(x)
+  this_state_scenarios <- all_forecasts[all_forecasts$state == x, ]
+  
+  all_scenarios <- do.call(rbind.fill, sapply(unique(this_state_scenarios$scenario), function(y){
+    print(y)
+    data_go <- this_state_scenarios[which(this_state_scenarios$state == x & this_state_scenarios$scenario == y), ]
+    data_go$scenario <- gsub(".Rdata", "", gsub("0percent", "0 percent", gsub(data_go$state[1], "", data_go$scenario)))
+    data_go$month_year <- paste0(month(data_go$date), "-", year(data_go$date))
+    if(any(is.na(data_go$date))) data_go <- data_go[-which(is.na(data_go$date)), ]
+    data_go[is.na(data_go)] <- 0
+    
+    data_go$month_year <- factor(data_go$month_year, levels = unique(data_go$month_year))
+    data_go_agg <- aggregate(data_go[, c("y")],
+                             by = list(compartment = data_go$compartment,
+                                       state = data_go$state,
+                                       scenario = data_go$scenario,
+                                       month_year = data_go$month_year,
+                                       replicate = data_go$replicate),
+                             FUN = sum)
+    
+    names(data_go_agg)[which(names(data_go_agg) == "x")] <- "y"
+    
+    deaths <- data_go_agg  %>% filter(compartment == "deaths") %>%
+      group_by(month_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                lower_5 = quantile(y, 0.025), 
+                upper_5 = quantile(y, 0.975)) 
+    
+    hospital_demand <- data_go_agg  %>% filter(compartment == "hospital_demand") %>%
+      group_by(month_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                lower_5 = quantile(y, 0.025), 
+                upper_5 = quantile(y, 0.975)) 
+    
+    ICU_demand <- data_go_agg  %>% filter(compartment == "ICU_demand") %>%
+      group_by(month_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                lower_5 = quantile(y, 0.025), 
+                upper_5 = quantile(y, 0.975)) 
+    
+    infections <- data_go_agg  %>% filter(compartment == "infections") %>%
+      group_by(month_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                lower_5 = quantile(y, 0.025), 
+                upper_5 = quantile(y, 0.975)) 
+    
+    df_setup <- data.frame(state = x, scenario = unique(data_go_agg$scenario),
+                           compartment = rep(c("Infections", "Deaths", "Hospital demand",
+                                               "ICU demand"), each = 3),
+                           type = rep(c("Median estimate", "Lower confidence interval", "Upper confidence interval")),
+                           stringsAsFactors = FALSE)
+    
+    number_matrix <- round(matrix(as.numeric(gsub(" ", "", rbind(t(infections)[2:ncol(infections), ], t(deaths)[2:ncol(deaths), ],
+                                                                 t(hospital_demand)[2:ncol(hospital_demand), ], t(ICU_demand)[2:ncol(ICU_demand), ]))), 
+                                  nrow = 12), 0)
+    
+    colnames(number_matrix) <- unique(data_go_agg$month_year)
+    
+    cbind(df_setup, number_matrix)
+    
+  }, simplify = FALSE))
+  
+  all_scenarios 
+  
+}, simplify = FALSE))
+
+ncdc_outcomes_send <- ncdc_outcomes_month[, -which(colnames(ncdc_outcomes_month) %in% c("2-2020", "3-2020"))]
+
+
+ncdc_outcomes_send <- ncdc_outcomes_send[which(ncdc_outcomes_send$scenario %in% c("0% reduction in transmission",
+                                                                                  "60% reduction in transmission for 90 days",
+                                                                                  "20% reduction in transmission for 180 days",
+                                                                                  "30% reduction in transmission for 180 days")), ]
+
+
+write.csv(ncdc_outcomes_send, paste0("outputs/Imperial_college_london_preliminary_monthly_summary_Nigera_states_", gsub("-", "",  Sys.Date()), ".csv"))
+
+
+
+ncdc_outcomes_week <- do.call(rbind.fill, sapply(unique(all_forecasts$state), function(x){
+  # print(x)
+  this_state_scenarios <- all_forecasts[all_forecasts$state == x, ]
+  
+  all_scenarios <- do.call(rbind.fill, sapply(unique(this_state_scenarios$scenario), function(y){
+    print(y)
+    data_go <- this_state_scenarios[which(this_state_scenarios$state == x & this_state_scenarios$scenario == y), ]
+    data_go$scenario <- gsub(".Rdata", "", gsub("0percent", "0 percent", gsub(data_go$state[1], "", data_go$scenario)))
+    data_go$week_year <- paste0(week(data_go$date), "-", year(data_go$date))
+    if(any(is.na(data_go$date))) data_go <- data_go[-which(is.na(data_go$date)), ]
+    data_go[is.na(data_go)] <- 0
+    
+    data_go$week_year <- factor(data_go$week_year, levels = unique(data_go$week_year))
+    data_go_agg <- aggregate(data_go[, c("y")],
+                             by = list(compartment = data_go$compartment,
+                                       state = data_go$state,
+                                       scenario = data_go$scenario,
+                                       week_year = data_go$week_year,
+                                       replicate = data_go$replicate),
+                             FUN = sum)
+    
+    names(data_go_agg)[which(names(data_go_agg) == "x")] <- "y"
+    
+    deaths <- data_go_agg  %>% filter(compartment == "deaths") %>%
+      group_by(week_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                       lower_5 = quantile(y, 0.025), 
+                       upper_5 = quantile(y, 0.975)) 
+    
+    hospital_demand <- data_go_agg  %>% filter(compartment == "hospital_demand") %>%
+      group_by(week_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                       lower_5 = quantile(y, 0.025), 
+                       upper_5 = quantile(y, 0.975)) 
+    
+    ICU_demand <- data_go_agg  %>% filter(compartment == "ICU_demand") %>%
+      group_by(week_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                       lower_5 = quantile(y, 0.025), 
+                       upper_5 = quantile(y, 0.975)) 
+    
+    infections <- data_go_agg  %>% filter(compartment == "infections") %>%
+      group_by(week_year) %>%  
+      dplyr::summarise(med_deaths = quantile(y, 0.5), 
+                       lower_5 = quantile(y, 0.025), 
+                       upper_5 = quantile(y, 0.975)) 
+    
+    df_setup <- data.frame(state = x, scenario = unique(data_go_agg$scenario),
+                           compartment = rep(c("Infections", "Deaths", "Hospital demand",
+                                               "ICU demand"), each = 3),
+                           type = rep(c("Median estimate", "Lower confidence interval", "Upper confidence interval")),
+                           stringsAsFactors = FALSE)
+    
+    number_matrix <- round(matrix(as.numeric(gsub(" ", "", rbind(t(infections)[2:ncol(infections), ], t(deaths)[2:ncol(deaths), ],
+                                                                 t(hospital_demand)[2:ncol(hospital_demand), ], t(ICU_demand)[2:ncol(ICU_demand), ]))), 
+                                  nrow = 12), 0)
+    
+    colnames(number_matrix) <- unique(data_go_agg$week_year)
+    
+    cbind(df_setup, number_matrix)
+    
+  }, simplify = FALSE))
+  
+  all_scenarios 
+  
+}, simplify = FALSE))
+
+
+ncdc_outcomes_send <- ncdc_outcomes_week[, -which(colnames(ncdc_outcomes_week) %in% c("14-2020", "12-2020", "13-2020", "15-2020", "16-2020",
+                                                                                      "9-2020", "10-2020", "11-2020", "8-2020", "7-2020"))]
+
+
+ncdc_outcomes_send <- ncdc_outcomes_send[which(ncdc_outcomes_send$scenario %in% c("0% reduction in transmission",
+                                                                                  "60% reduction in transmission for 90 days",
+                                                                                  "20% reduction in transmission for 180 days",
+                                                                                  "30% reduction in transmission for 180 days")), ]
+
+
+write.csv(ncdc_outcomes_send, paste0("outputs/Imperial_college_london_preliminary_weekly_summary_Nigera_states_", gsub("-", "",  Sys.Date()), ".csv"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ncdc_outcomes_send[which(ncdc_outcomes_send$compartment == "Deaths"), 5:ncol(ncdc_outcomes_send)]
+
+
+
+
+#Starting R0
+starting_R0 <- do.call(rbind, sapply(which(grepl("20percent reduction in transmission for 180 days.Rdata", names(squire_model_list))), function(x){
+  
+  this_model <- squire_model_list[[x]][[1]]
+  data.frame(state = squire_model_list[[x]]$covid_case_death_data$state[1],
+             R0 = this_model$replicate_parameters$R0,
+             date_first_start = median(ymd(this_model$replicate_parameters$start_date)),
+             stringsAsFactors = FALSE)
+  
+}, simplify = FALSE))
+
+
+library(viridis)
+
+myBreaks <- function(x){
+  breaks <- c(min(x),median(x),max(x))
+  attr(breaks,"labels") <- as.Date(breaks, origin = "1970-01-01")
+  names(breaks) <- attr(breaks,"labels")
+  return(breaks)
+}
+
+
+R0_start_by_state <- ggplot() + geom_boxplot(data = starting_R0,
+                                             aes(x = reorder(state, date_first_start), y = R0, 
+                                                 fill = as.integer(as.Date(date_first_start, origin = ymd("1970-01-01"))))) + 
+  theme_minimal() + 
+  labs(y = "R0", x = "", fill = "Median start date\nof transmission") +
+  scale_fill_distiller(palette = "RdYlBu", breaks = myBreaks)
+
+R0_start_by_state
+
+
+
+
+
+
+# 
+# ggsave(paste0("figs/", "R0_start_date",
+#               gsub("-", "", Sys.Date()), ".png"), R0_start_by_state, 
+#        dpi = 600, width = 10, height = 6)
+
+
+
+
+
+
+# write.csv(sept_3rd, "outputs/Imperial_college_london_preliminary_sept_3rd_cumulative_estimates.csv")
+max_by_state <- do.call(rbind, sapply(unique(COVID_data_all$state), function(x){
+  this_state <- COVID_data_all[which(COVID_data_all$state == x), ]
+  data.frame(state = this_state$state[1], max_deaths = sum(this_state$deaths, na.rm = TRUE),
+             max_cases = sum(this_state$cases, na.rm = TRUE), stringsAsFactors = FALSE)
+}, simplify = FALSE))
+
+max_by_state <- max_by_state[order(max_by_state$max_cases), ]
+
+
+#All Nigeria movement
+#Read in mobility data
+mobility_data <- as.data.frame(fread("https://www.gstatic.com/covid19/mobility/Global_Mobility_Report.csv?cachebust=a88b56a24e1a1e25"))
+mobility_data$date <- ymd(mobility_data$date)
+NGA_data <- mobility_data[which(mobility_data$country_region == "Nigeria"), ]
+NGA_data$sub_region_1[which(NGA_data$sub_region_1 == "")] <- "Nigeria (all)"
+
+NGA_data_simple <- data.frame(country = NGA_data$country_region,
+                              adm1 = NGA_data$sub_region_1,
+                              date = ymd(NGA_data$date),
+                              outside = rowMeans(NGA_data[, c("retail_and_recreation_percent_change_from_baseline",
+                                                              "grocery_and_pharmacy_percent_change_from_baseline",
+                                                              "parks_percent_change_from_baseline")], na.rm = T),
+                              work = rowMeans(NGA_data[, c("transit_stations_percent_change_from_baseline",
+                                                           "workplaces_percent_change_from_baseline")], na.rm = T),
+                              home = NGA_data[, "residential_percent_change_from_baseline"],
+                              stringsAsFactors = FALSE)
+
+NGA_data_simple$overall <- rowMeans(NGA_data_simple[, c("outside", "work", "home")], na.rm = TRUE)
+
+
+NGA_data_simple_ggplot <- data.frame(country = rep(NGA_data_simple$country, 4),
+                                     adm1 = rep(NGA_data_simple$adm1, 4),
+                                     date = rep(NGA_data_simple$date, 4),
+                                     type = rep(c("Outside", "Work", "Home", "Overall"), each = nrow(NGA_data_simple)),
+                                     value = c(NGA_data_simple$outside, NGA_data_simple$work, 
+                                               NGA_data_simple$home, NGA_data_simple$overall),
+                                     stringsAsFactors = FALSE)
+
+NGA_data_simple_ggplot$type <- factor(NGA_data_simple_ggplot$type, levels = c("Overall", "Work", "Outside", "Home"))
+
+NGA_data_simple_ggplot$adm1 <- factor(NGA_data_simple_ggplot$adm1, levels = unique(NGA_data_simple_ggplot$adm1))
+NGA_data_simple_ggplot$line_thickness <- 1
+NGA_data_simple_ggplot$line_thickness[which(NGA_data_simple_ggplot$type == "Overall")] <- 10
+
+NGA_all_go <- NGA_data_simple_ggplot[which(NGA_data_simple_ggplot$adm1 == "Nigeria (all)" & NGA_data_simple_ggplot$type == "Overall"), ]
+
+names_use <- c(names(which(sort(table(death_by_state$state)) > 3)), 
+               "Nigeria (all)")
+# names_use <- c("Borno", "Delta", "Edo", "Federal Capital Territory", 
+               # "Kaduna", "Kano", "Katsina", "Lagos", "Ogun State", "Osun", "Sokoto", "Zamfara")#c(names_use[-which(names_use == "Akwa Ibom")], "Kaduna")
+
+NGA_data_simple_ggplot <- subset(NGA_data_simple_ggplot,
+                          adm1 %in% c(names_use, 
+                                      "Nigeria (all)"))
+
+movement_all_Nigeria <- ggplot() + geom_line(data = subset(NGA_data_simple_ggplot,
+                                                           adm1 %in% c(names_use, 
+                                                                       "Nigeria (all)")), 
+                                             aes(x = date, y = value, color = type, group = type,
+                                                 size = line_thickness)) +
+  facet_wrap(~adm1, ncol = 3) + labs(x = "", y = "Movement change (%)", color = "State") + theme_minimal() +
+  geom_hline(yintercept = 0) + theme(strip.background.x = element_blank(),
+                                     legend.position = "bottom") + 
+  scale_x_date(date_labels = "%b - %d", limits = c(ymd("2020/03/01"), ymd(Sys.Date()))) +
+  # scale_size(guide = 'none') + 
+  scale_size_continuous(range = c(.75, 1.5), guide = "none")
+
+
+
+latest_movement_last_week <- NGA_data_simple_ggplot[which(NGA_data_simple_ggplot$type == "Overall" & NGA_data_simple_ggplot$date %in% seq.Date((max(NGA_data_simple_ggplot$date)-7), max(NGA_data_simple_ggplot$date), by = "day")), ]
+agg_last_week <- aggregate(latest_movement_last_week[, "value"],
+                           by = list(latest_movement_last_week$adm1),
+                           FUN = mean)
+names(agg_last_week) <- c("state", "movement")
+agg_last_week <- agg_last_week[order(agg_last_week$movement), ]
+
+#R0 median
+R0_median_data <- aggregate(starting_R0[, c("R0", "date_first_start")],
+                            by = list(state = starting_R0$state),
+                            FUN = median)
+R0_median_data <- R0_median_data[order(R0_median_data$date_first_start), ]
+
+
+#Words
+total_NGA_cases <- NGA_overall_data$cumulative_cases
+total_NGA_deaths <- NGA_overall_data$cumulative_deaths
+faster_or_slower <- "decreasing"
+current_doubling_time <- ">7 days"
+states_with_most_cases <- paste(paste0(max_by_state[(nrow(max_by_state)-2):nrow(max_by_state), ]$state, " (", max_by_state[(nrow(max_by_state)-2):nrow(max_by_state), ]$max_cases, ")"), collapse = ", ")
+states_used <- as.character(unique(two_week_forecast$state))#names(which(table(death_here$state) >= 3))
+last_google_percent_reduction <- last(NGA_all_go$value)
+last_google_timepoint <- last(NGA_all_go$date)
+states_with_highest_movement_reductions_and_numbers <- paste(paste0(agg_last_week[1:3, ]$state, " (", round(agg_last_week[1:3, ]$movement, 1), "%)"), sep = ", ")
+states_with_lowest_movement_reductions_and_numbers <- paste(paste0(agg_last_week[(nrow(agg_last_week)-2):nrow(agg_last_week), ]$state, " (", round(agg_last_week[(nrow(agg_last_week)-2):nrow(agg_last_week), ]$movement, 1), "%)"), sep = ", ")
+states_latest_introduction_and_date <- paste(paste0(R0_median_data[(nrow(R0_median_data)-1):nrow(R0_median_data), ]$state, " (", R0_median_data[(nrow(R0_median_data)-1):nrow(R0_median_data), ]$date_first_start, ")"), collapse = ", ")
+min_R0 <- min(R0_median_data$R0)
+min_R0_state <- R0_median_data$state[which.min(R0_median_data$R0)]
+max_R0_state <- R0_median_data$state[which.max(R0_median_data$R0)]
+max_R0 <- max(R0_median_data$R0)
+
+deaths_two_weeks <- two_week_forecast[which(two_week_forecast$type == "deaths"), ]
+deaths_two_weeks$deaths <- as.numeric(matrix(gsub(" ", "", unlist(strsplit(as.character(deaths_two_weeks$two_week_inci), "\\("))), ncol = 2, byrow = TRUE)[, 1])
+
+worst_state_short_term_deaths  <- as.character(deaths_two_weeks$state[which.max(deaths_two_weeks$deaths)])
+worst_state_short_term_deaths_number <- as.character(deaths_two_weeks$two_week_inci[which.max(deaths_two_weeks$deaths)])
+best_state_short_term_deaths <- as.character(deaths_two_weeks$state[which.min(deaths_two_weeks$deaths)])
+best_state_short_term_deaths_number <- as.character(deaths_two_weeks$two_week_inci[which.min(deaths_two_weeks$deaths)])
+
+general_hospital_two_weeks <- two_week_forecast[which(two_week_forecast$type == "hospital_demand"), ]
+general_hospital_two_weeks$capacity <- sapply(general_hospital_two_weeks$state, function(x) oxygen_data[which(oxygen_data$state == x), ]$oxygen)
+
+general_hospital_two_weeks$demand_now <- as.numeric(matrix(gsub(" ", "", unlist(strsplit(as.character(deaths_two_weeks$today), "\\("))), ncol = 2, byrow = TRUE)[, 1])
+general_hospital_two_weeks$demand_two_weeks <- as.numeric(matrix(gsub(" ", "", unlist(strsplit(as.character(deaths_two_weeks$two_week_inci), "\\("))), ncol = 2, byrow = TRUE)[, 1])
+
+number_of_states_exceeded <- sum(general_hospital_two_weeks$demand_now >= general_hospital_two_weeks$capacity)
+number_of_states_exceeded_14_days_time <- sum(general_hospital_two_weeks$demand_two_weeks >= general_hospital_two_weeks$capacity)
+# 
+# all_states_peak_20 <- sapply(unique(all_forecasts$state), function(x){
+#   print(x)
+#   here <- all_forecasts[which(grepl("20percent reduction in transmission for 180", all_forecasts$scenario) & 
+#                                 all_forecasts$compartment == "infections" & all_forecasts$state == x), ]
+#   here$date[which.max(here$y)]
+# }, simplify = FALSE)
+# 
+# all_states_peak_40 <- sapply(unique(all_forecasts$state), function(x){
+#   here <- all_forecasts[which(grepl("320percent reduction in transmission for 180", all_forecasts$scenario) & 
+#                                 all_forecasts$compartment == "infections" & all_forecasts$state == x), ]
+#   here$date[which.max(here$y)]
+# }, simplify = FALSE)
+# 
+# peak_range_20_percent_text <- as.character(unique(lubridate::month(ymd(do.call("c", all_states_peak_20)), abbr = FALSE, label = TRUE)))
+# peak_range_40_percent_text <- as.character(unique(lubridate::month(ymd(do.call("c", all_states_peak_40)), abbr = FALSE, label = TRUE)))
+
+
+
+
+#Plots
+NGA_log_plot <- NGA_log_plot
+google_state_mobility_plot <- movement_all_Nigeria
+state_data_fit_plot <- plot_fit_yay
+state_R0_plot <- R0_start_by_state
+short_term_proj_deaths <- infections_deaths
+short_term_proj_hospital_ICU_demand <- healthcare_icu
+
+short_term_forecast_hospital_table <- two_week_forecast[which(two_week_forecast$type %in% c("ICU_demand", "hospital_demand")), ]
+
+long_term_deaths <- all_states_scenarios
+long_term_infections_deaths_table <- final_outcome_df[which(final_outcome_df$scenario %in% 
+                                                              c("60% reduction in transmission for 90 days",  "20% reduction in transmission for 180 days", "30% reduction in transmission for 180 days")), 
+                                                      c("state", "scenario", "duration_scenario", "cumulative_deaths", "cumulative_infections", "time_hospital_beds_exceeded")]
+
+long_term_infections_deaths_table[, c("cumulative_deaths", "cumulative_infections")] <- round_any(as.matrix(long_term_infections_deaths_table[, c("cumulative_deaths", "cumulative_infections")]), 100)
+
+long_term_infections_deaths_table$cumulative_deaths <- formatC(long_term_infections_deaths_table$cumulative_deaths, big.mark = ",", format = "fg")
+long_term_infections_deaths_table$cumulative_infections <- formatC(long_term_infections_deaths_table$cumulative_infections, big.mark = ",", format = "fg")
+
+
+# long_term_infections_deaths_table[, 3:ncol(long_term_infections_deaths_table)] <- round(long_term_infections_deaths_table[, 3:ncol(long_term_infections_deaths_table)], 0)
+colnames(long_term_infections_deaths_table) <- c("State", "Scenario", "Duration of scenario", "Cumulative deaths",
+                                                 "Cumulative infections", "Days hospital beds exceeded")
+if(any(is.na(names(long_term_infections_deaths_table)))) long_term_infections_deaths_table <- long_term_infections_deaths_table[, -which(is.na(colnames(long_term_infections_deaths_table)))]
+
+
+colnames(short_term_forecast_hospital_table) <- c("State", "Type", "Last 30 days cumulative", "Next 14 days cumulative",
+                                                  "Incidence today", "Incidence in 14 days")
+short_term_forecast_hospital_table$Type <- gsub("ICU_demand", "Ventilation demand",
+                                                gsub("hospital_demand", "Supplemental O2 demand",
+                                                     short_term_forecast_hospital_table$Type))
+
+short_term_forecast_hospital_table <- short_term_forecast_hospital_table[, -which(colnames(short_term_forecast_hospital_table) %in% c("Last 30 days cumulative", "Next 14 days cumulative"))]
+
+
+
+
+
+
+
+
+
+
+# save.image(paste0("U:/Arran/COVID/nigeria_squire/local_saves/", gsub("-", "", Sys.Date()), ".Rdata"))
+# load(paste0("U:/Arran/COVID/nigeria_squire/local_saves/20200522.Rdata"))
+
+
+# load(paste0("U:/Arran/COVID/nigeria_squire/local_saves/", gsub("-", "", Sys.Date()), ".Rdata"))
+
+save_list <- list(short_term_forecast_hospital_table,
+                    long_term_infections_deaths_table,
+                    long_term_deaths,
+                    short_term_forecast_hospital_table,
+                    short_term_proj_hospital_ICU_demand,
+                    short_term_proj_deaths,
+                    state_R0_plot,
+                    state_data_fit_plot,
+                    google_state_mobility_plot,
+                    NGA_log_plot,
+                    number_of_states_exceeded_14_days_time,
+                    number_of_states_exceeded,
+                    general_hospital_two_weeks,
+                    best_state_short_term_deaths_number,
+                    best_state_short_term_deaths,
+                    worst_state_short_term_deaths_number,
+                    worst_state_short_term_deaths,
+                    deaths_two_weeks,
+                    max_R0,
+                    max_R0_state,
+                    min_R0_state,
+                    min_R0,
+                    states_latest_introduction_and_date,
+                    states_with_lowest_movement_reductions_and_numbers,
+                    states_with_highest_movement_reductions_and_numbers,
+                    last_google_timepoint,
+                    last_google_percent_reduction,
+                    states_used,
+                    states_with_most_cases,
+                    current_doubling_time,
+                    faster_or_slower,
+                    total_NGA_deaths,
+                    total_NGA_cases)
+
+names(save_list) <- c("short_term_forecast_hospital_table",
+                      "long_term_infections_deaths_table",
+                      "long_term_deaths",
+                      "short_term_forecast_hospital_table",
+                      "short_term_proj_hospital_ICU_demand",
+                      "short_term_proj_deaths",
+                      "state_R0_plot",
+                      "state_data_fit_plot",
+                      "google_state_mobility_plot",
+                      "NGA_log_plot",
+                      "number_of_states_exceeded_14_days_time",
+                      "number_of_states_exceeded",
+                      "general_hospital_two_weeks",
+                      "best_state_short_term_deaths_number",
+                      "best_state_short_term_deaths",
+                      "worst_state_short_term_deaths_number",
+                      "worst_state_short_term_deaths",
+                      "deaths_two_weeks",
+                      "max_R0",
+                      "max_R0_state",
+                      "min_R0_state",
+                      "min_R0",
+                      "states_latest_introduction_and_date",
+                      "states_with_lowest_movement_reductions_and_numbers",
+                      "states_with_highest_movement_reductions_and_numbers",
+                      "last_google_timepoint",
+                      "last_google_percent_reduction",
+                      "states_used",
+                      "states_with_most_cases",
+                      "current_doubling_time",
+                      "faster_or_slower",
+                      "total_NGA_deaths",
+                      "total_NGA_cases")
+
+save(file = paste0("U:/Arran/COVID/nigeria_squire/local_saves/list", gsub("-", "", Sys.Date()), ".Rdata"),
+     save_list)
